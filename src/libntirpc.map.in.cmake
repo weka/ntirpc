@@ -172,6 +172,13 @@ NTIRPC_${NTIRPC_VERSION_BASE} {
     # u*
     uaddr2taddr;
 
+    # w*
+    weka_proto_slot;
+    weka_proto_set_info;
+    weka_proto_get_info;
+    weka_proto_set_atime_info;
+    weka_proto_clear_atime_info;
+
     # x*
     xdr_authunix_parms;
     xdr_call_decode;
