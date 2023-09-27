@@ -63,6 +63,7 @@ SET(ntirpc_common_SRCS
   xdr_ioq.c
   svc_ioq.c
   work_pool.c
+  weka_proto_lib.c
 )
 
 if(USE_GSS)
