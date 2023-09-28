@@ -56,6 +56,8 @@
 #include <errno.h>
 #include <intrinsic.h>
 #include <urcu-bp.h>
+#include <fcntl.h>
+#include <unistd.h>
 
 #include <rpc/work_pool.h>
 
@@ -68,6 +70,29 @@
 
 static int work_pool_spawn(struct work_pool *pool);
 __thread int weka_proto_slot;
+
+bool
+work_pool_check_ganesha(int pid)
+{
+	bool is_ganesha = false;
+	char *ganesha = "ganesha.nfsd";
+	char name[64];
+	char buf[1024];
+	sprintf(name, "/proc/%d/comm", pid);
+	FILE* f = fopen(name, "r");
+	if (f) {
+		size_t size;
+		size = fread(buf, sizeof(char), 1024, f);
+		if(size > 0) {
+			if('\n' == buf[size-1])
+				buf[size-1]='\0';
+			if (!strcmp(buf, ganesha))
+				is_ganesha = true;
+		}
+		fclose(f);
+	}
+	return is_ganesha;
+}
 
 int
 work_pool_init(struct work_pool *pool, const char *name,
@@ -133,12 +158,14 @@ work_pool_init(struct work_pool *pool, const char *name,
 	pool->n_threads = 1;
 
 	/* Initialize weka protocol driver */
-	rc = weka_proto_init();
-	if (rc) {
-		__warnx(TIRPC_DEBUG_FLAG_ERROR,
-			"%s() unable to initialize weka proto driver : %s (%d)",
-			__func__, strerror(rc), rc);
-		return rc;
+	if (work_pool_check_ganesha(getpid())) {
+		rc = weka_proto_init();
+		if (rc) {
+			__warnx(TIRPC_DEBUG_FLAG_ERROR,
+				"%s() unable to initialize weka proto driver : %s (%d)",
+				__func__, strerror(rc), rc);
+			return rc;
+		}
 	}
 
 	return work_pool_spawn(pool);
@@ -175,6 +202,11 @@ work_pool_thread(void *arg)
 	snprintf(wpt->worker_name, sizeof(wpt->worker_name), "%.5s%" PRIu32,
 		 pool->name, wpt->worker_index);
 	__ntirpc_pkg_params.thread_name_(wpt->worker_name);
+        pthread_setname_np(wpt->pt, wpt->worker_name);
+
+	__warnx(TIRPC_DEBUG_FLAG_WORKER,
+			"%s() %s",
+			__func__, wpt->worker_name);
 
 	__warnx(TIRPC_DEBUG_FLAG_WORKER,
 			"%s() %s",

@@ -44,7 +44,7 @@ typedef struct weka_proto_ioctl {
 } weka_proto_ioctl_t;
 
 #define WEKA_PROTO_INVALID_FIP_VERSION        0xFFFF
-#define WEKA_PROTO_MISMATCH_VERSION_ERR       125       /* ECANCELED */
+#define WEKA_PROTO_MISMATCH_VERSION_ERR       -125       /* ECANCELED */
 #define WEKA_PROTO_INVALID_OPCODE             0xFF
 #define WEKA_PROTO_INVALID_NAME               0
 
