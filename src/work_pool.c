@@ -59,12 +59,15 @@
 
 #include <rpc/work_pool.h>
 
+#include "misc/weka_proto.h"
+
 #define WORK_POOL_STACK_SIZE MAX(1 * 1024 * 1024, PTHREAD_STACK_MIN)
 #define WORK_POOL_TIMEOUT_MS (31 /* seconds (prime) */ * 1000)
 
 /* forward declaration in lieu of moving code, was inline */
 
 static int work_pool_spawn(struct work_pool *pool);
+__thread int weka_proto_slot;
 
 int
 work_pool_init(struct work_pool *pool, const char *name,
@@ -128,6 +131,16 @@ work_pool_init(struct work_pool *pool, const char *name,
 
 	/* initial spawn will spawn more threads as needed */
 	pool->n_threads = 1;
+
+	/* Initialize weka protocol driver */
+	rc = weka_proto_init();
+	if (rc) {
+		__warnx(TIRPC_DEBUG_FLAG_ERROR,
+			"%s() unable to initialize weka proto driver : %s (%d)",
+			__func__, strerror(rc), rc);
+		return rc;
+	}
+
 	return work_pool_spawn(pool);
 }
 
@@ -156,10 +169,16 @@ work_pool_thread(void *arg)
 	pthread_mutex_lock(&pool->pqh.qmutex);
 	TAILQ_INSERT_TAIL(&pool->wptqh, wpt, wptq);
 
+	weka_proto_slot = weka_proto_alloc_slot();
+
 	wpt->worker_index = atomic_inc_uint32_t(&pool->worker_index);
 	snprintf(wpt->worker_name, sizeof(wpt->worker_name), "%.5s%" PRIu32,
 		 pool->name, wpt->worker_index);
 	__ntirpc_pkg_params.thread_name_(wpt->worker_name);
+
+	__warnx(TIRPC_DEBUG_FLAG_WORKER,
+			"%s() %s",
+			__func__, wpt->worker_name);
 
 	do {
 		/* testing at top of loop allows pre-specification of work,
@@ -236,6 +255,8 @@ work_pool_thread(void *arg)
 	TAILQ_REMOVE(&pool->wptqh, wpt, wptq);
 	pthread_mutex_unlock(&pool->pqh.qmutex);
 
+	weka_proto_free_slot(weka_proto_slot);
+
 	__warnx(TIRPC_DEBUG_FLAG_WORKER,
 		"%s() %s terminating",
 		__func__, wpt->worker_name);
@@ -307,6 +328,8 @@ work_pool_shutdown(struct work_pool *pool)
 		.tv_nsec = 3000,
 	};
 
+	int rc;
+
 	pthread_mutex_lock(&pool->pqh.qmutex);
 	pool->timeout_ms = 1;
 	pool->params.thrd_max =
@@ -330,6 +353,14 @@ work_pool_shutdown(struct work_pool *pool)
 
 	mem_free(pool->name, 0);
 	poolq_head_destroy(&pool->pqh);
+
+	/* release per thread slots */
+	rc = weka_proto_shutdown();
+	if (rc) {
+		__warnx(TIRPC_DEBUG_FLAG_ERROR,
+			"%s() failed to shutdown weka proto driver : %s (%d)",
+			__func__, strerror(rc), rc);
+	}
 
 	return (0);
 }
