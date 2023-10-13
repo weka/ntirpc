@@ -139,11 +139,13 @@ worker_cb(struct clnt_req *cc)
 	}
 
 	clnt_req_release(cc);
+	pthread_mutex_lock(&s->s_mutex);
 	if (atomic_inc_uint32_t(&s->responses) < s->count) {
+		pthread_mutex_unlock(&s->s_mutex);
 		return;
 	}
-
 	pthread_cond_broadcast(&s->s_cond);
+	pthread_mutex_unlock(&s->s_mutex);
 }
 
 static void *
@@ -182,15 +184,18 @@ worker(void *arg)
 	}
 
 	pthread_mutex_lock(&s->s_mutex);
-	pthread_cond_wait(&s->s_cond, &s->s_mutex);
+	while (s->responses < s->count)
+		pthread_cond_wait(&s->s_cond, &s->s_mutex);
 	pthread_mutex_unlock(&s->s_mutex);
 	clock_gettime(CLOCK_MONOTONIC, &s->stopping);
 
+	pthread_mutex_lock(&rpcping_mutex);
 	if (atomic_dec_uint32_t(&rpcping_threads) > 0) {
+		pthread_mutex_unlock(&rpcping_mutex);
 		return NULL;
 	}
-
 	pthread_cond_broadcast(&rpcping_cond);
+	pthread_mutex_unlock(&rpcping_mutex);
 	return NULL;
 }
 
@@ -255,6 +260,7 @@ int main(int argc, char *argv[])
 	unsigned int failures = 0;
 	unsigned int timeouts = 0;
 	bool rpcbind = false;
+	int exit_code = 0;
 
 #ifdef USE_LTTNG_NTIRPC
 	tracepoint(rpcping, test,
@@ -368,7 +374,8 @@ int main(int argc, char *argv[])
 	}
 
 	pthread_mutex_lock(&rpcping_mutex);
-	pthread_cond_wait(&rpcping_cond, &rpcping_mutex);
+	while (rpcping_threads > 0)
+		pthread_cond_wait(&rpcping_cond, &rpcping_mutex);
 	pthread_mutex_unlock(&rpcping_mutex);
 
 	total = 0.0;
@@ -390,5 +397,9 @@ int main(int argc, char *argv[])
 	fflush(stdout);
 
 	(void)svc_shutdown(SVC_SHUTDOWN_FLAG_NONE);
-	return (0);
+	if (failures > 0)
+		exit_code = 5;
+	else if (timeouts > 0)
+		exit_code = 6;
+	return (exit_code);
 }
