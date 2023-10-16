@@ -40,8 +40,7 @@
 static pthread_mutex_t rpcping_mutex = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t rpcping_cond = PTHREAD_COND_INITIALIZER;
 static uint32_t rpcping_threads;
-
-static struct timespec to = {30, 0};
+static int rpc_timeout_secs = 30;
 
 struct state {
 	CLIENT *handle;
@@ -154,6 +153,7 @@ worker(void *arg)
 	struct state *s = arg;
 	struct clnt_req *cc;
 	int i;
+        struct timespec to = {rpc_timeout_secs, 0};
 
 	pthread_cond_init(&s->s_cond, NULL);
 	pthread_mutex_init(&s->s_mutex, NULL);
@@ -220,7 +220,7 @@ free_request(struct svc_req *req, enum xprt_stat stat)
 
 static void usage(void)
 {
-	printf("Usage: rpcping <raw|rdma|tcp|udp> <host> [--rpcbind] [--count=<n>] [--threads=<n>] [--workers=<n>] [--port=<n>] [--program=<n>] [--version=<n>] [--procedure=<n>]\n");
+	printf("Usage: rpcping <raw|rdma|tcp|udp> <host> [--rpcbind] [--count=<n>] [--threads=<n>] [--workers=<n>] [--port=<n>] [--program=<n>] [--version=<n>] [--procedure=<n>] [--rpc_timeout_secs=<n>]\n");
 }
 
 static struct option long_options[] =
@@ -233,6 +233,7 @@ static struct option long_options[] =
 	{"version", required_argument, NULL, 'v'},
 	{"procedure", required_argument, NULL, 'x'},
 	{"rpcbind", no_argument, NULL, 'b'},
+	{"rpc_timeout_secs", required_argument, NULL, 'r'},
 	{NULL, 0, NULL, 0}
 };
 
@@ -276,7 +277,7 @@ int main(int argc, char *argv[])
 	host = argv[2];
 
 	optind = 3;
-	while ((opt = getopt_long(argc, argv, "bc:m:p:t:v:w:x:",
+	while ((opt = getopt_long(argc, argv, "bc:m:p:t:v:w:x:r:",
 				  long_options, NULL)) != -1) {
 		switch (opt)
 		{
@@ -304,13 +305,15 @@ int main(int argc, char *argv[])
 		case 'b':
 			rpcbind = true;
 			break;
+		case 'r':
+			rpc_timeout_secs = atoi(optarg);
+			break;
 		default:
 			usage();
 			exit(1);
 			break;
 		};
 	}
-
 	states = calloc(nthreads, sizeof(struct state));
 	if (!states) {
 		perror("calloc failed");
