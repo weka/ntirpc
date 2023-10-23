@@ -40,8 +40,7 @@
 static pthread_mutex_t rpcping_mutex = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t rpcping_cond = PTHREAD_COND_INITIALIZER;
 static uint32_t rpcping_threads;
-
-static struct timespec to = {30, 0};
+static int rpctimeout = 30;
 
 struct state {
 	CLIENT *handle;
@@ -139,11 +138,13 @@ worker_cb(struct clnt_req *cc)
 	}
 
 	clnt_req_release(cc);
+	pthread_mutex_lock(&s->s_mutex);
 	if (atomic_inc_uint32_t(&s->responses) < s->count) {
+		pthread_mutex_unlock(&s->s_mutex);
 		return;
 	}
-
 	pthread_cond_broadcast(&s->s_cond);
+	pthread_mutex_unlock(&s->s_mutex);
 }
 
 static void *
@@ -152,6 +153,7 @@ worker(void *arg)
 	struct state *s = arg;
 	struct clnt_req *cc;
 	int i;
+        struct timespec to = {rpctimeout, 0};
 
 	pthread_cond_init(&s->s_cond, NULL);
 	pthread_mutex_init(&s->s_mutex, NULL);
@@ -182,15 +184,18 @@ worker(void *arg)
 	}
 
 	pthread_mutex_lock(&s->s_mutex);
-	pthread_cond_wait(&s->s_cond, &s->s_mutex);
+	while (s->responses < s->count)
+		pthread_cond_wait(&s->s_cond, &s->s_mutex);
 	pthread_mutex_unlock(&s->s_mutex);
 	clock_gettime(CLOCK_MONOTONIC, &s->stopping);
 
+	pthread_mutex_lock(&rpcping_mutex);
 	if (atomic_dec_uint32_t(&rpcping_threads) > 0) {
+		pthread_mutex_unlock(&rpcping_mutex);
 		return NULL;
 	}
-
 	pthread_cond_broadcast(&rpcping_cond);
+	pthread_mutex_unlock(&rpcping_mutex);
 	return NULL;
 }
 
@@ -213,9 +218,9 @@ free_request(struct svc_req *req, enum xprt_stat stat)
 	free(req);
 }
 
-static void usage()
+static void usage(void)
 {
-	printf("Usage: rpcping <raw|rdma|tcp|udp> <host> [--rpcbind] [--count=<n>] [--threads=<n>] [--workers=<n>] [--port=<n>] [--program=<n>] [--version=<n>] [--procedure=<n>]\n");
+	printf("Usage: rpcping <raw|rdma|tcp|udp> <host> [--rpcbind] [--count=<n>] [--threads=<n>] [--workers=<n>] [--port=<n>] [--program=<n>] [--version=<n>] [--procedure=<n>] [--rpctimeout=<n>]\n");
 }
 
 static struct option long_options[] =
@@ -228,6 +233,7 @@ static struct option long_options[] =
 	{"version", required_argument, NULL, 'v'},
 	{"procedure", required_argument, NULL, 'x'},
 	{"rpcbind", no_argument, NULL, 'b'},
+	{"rpctimeout", required_argument, NULL, 'r'},
 	{NULL, 0, NULL, 0}
 };
 
@@ -255,6 +261,7 @@ int main(int argc, char *argv[])
 	unsigned int failures = 0;
 	unsigned int timeouts = 0;
 	bool rpcbind = false;
+	int exit_code = 0;
 
 #ifdef USE_LTTNG_NTIRPC
 	tracepoint(rpcping, test,
@@ -270,7 +277,7 @@ int main(int argc, char *argv[])
 	host = argv[2];
 
 	optind = 3;
-	while ((opt = getopt_long(argc, argv, "bc:m:p:t:v:w:x:",
+	while ((opt = getopt_long(argc, argv, "bc:m:p:t:v:w:x:r:",
 				  long_options, NULL)) != -1) {
 		switch (opt)
 		{
@@ -298,13 +305,15 @@ int main(int argc, char *argv[])
 		case 'b':
 			rpcbind = true;
 			break;
+		case 'r':
+			rpctimeout = atoi(optarg);
+			break;
 		default:
 			usage();
 			exit(1);
 			break;
 		};
 	}
-
 	states = calloc(nthreads, sizeof(struct state));
 	if (!states) {
 		perror("calloc failed");
@@ -368,7 +377,8 @@ int main(int argc, char *argv[])
 	}
 
 	pthread_mutex_lock(&rpcping_mutex);
-	pthread_cond_wait(&rpcping_cond, &rpcping_mutex);
+	while (rpcping_threads > 0)
+		pthread_cond_wait(&rpcping_cond, &rpcping_mutex);
 	pthread_mutex_unlock(&rpcping_mutex);
 
 	total = 0.0;
@@ -390,5 +400,9 @@ int main(int argc, char *argv[])
 	fflush(stdout);
 
 	(void)svc_shutdown(SVC_SHUTDOWN_FLAG_NONE);
-	return (0);
+	if (failures > 0)
+		exit_code = 5;
+	else if (timeouts > 0)
+		exit_code = 6;
+	return (exit_code);
 }
