@@ -58,7 +58,7 @@
 #include <urcu-bp.h>
 
 #include <rpc/work_pool.h>
-#include <wtracer.h>
+//#include <wtracer.h>
 
 #define WORK_POOL_STACK_SIZE MAX(1 * 1024 * 1024, PTHREAD_STACK_MIN)
 #define WORK_POOL_TIMEOUT_MS (31 /* seconds (prime) */ * 1000)
@@ -66,6 +66,9 @@
 /* forward declaration in lieu of moving code, was inline */
 
 static int work_pool_spawn(struct work_pool *pool);
+
+typedef void (*wtracer_init_func_t) (void);
+wtracer_init_func_t wtracer_init = NULL;
 
 int
 work_pool_init(struct work_pool *pool, const char *name,
@@ -161,7 +164,9 @@ work_pool_thread(void *arg)
 		 pool->name, wpt->worker_index);
 	__ntirpc_pkg_params.thread_name_(wpt->worker_name);
 
-	wtracer_initialize_external_thread();
+	//wtracer_initialize_external_thread();
+	if (wtracer_init)
+		(*wtracer_init)();
 
 	do {
 		/* testing at top of loop allows pre-specification of work,
@@ -345,4 +350,11 @@ work_pool_shutdown(struct work_pool *pool)
 	poolq_head_destroy(&pool->pqh);
 
 	return (0);
+}
+
+
+void
+ntirpc_wtracer_reg(wtracer_init_func_t func)
+{
+	wtracer_init = func;
 }

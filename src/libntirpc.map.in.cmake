@@ -89,6 +89,7 @@ NTIRPC_${NTIRPC_VERSION_BASE} {
     # n*
     nc_perror;
     nc_sperror;
+    ntirpc_wtracer_reg;
 
     # o*
     opr_rbtree_first;
