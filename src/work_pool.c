@@ -58,6 +58,7 @@
 #include <urcu-bp.h>
 
 #include <rpc/work_pool.h>
+#include <wtracer.h>
 
 #define WORK_POOL_STACK_SIZE MAX(1 * 1024 * 1024, PTHREAD_STACK_MIN)
 #define WORK_POOL_TIMEOUT_MS (31 /* seconds (prime) */ * 1000)
@@ -159,6 +160,8 @@ work_pool_thread(void *arg)
 	snprintf(wpt->worker_name, sizeof(wpt->worker_name), "%.5s%" PRIu32,
 		 pool->name, wpt->worker_index);
 	__ntirpc_pkg_params.thread_name_(wpt->worker_name);
+
+	wtracer_initialize_external_thread();
 
 	do {
 		/* testing at top of loop allows pre-specification of work,
