@@ -28,6 +28,7 @@
 #include <sys/times.h>
 #include <sys/types.h>
 #include <sys/socket.h>
+#include <sys/syscall.h>
 #include <netdb.h>
 #include <pthread.h>
 #include <getopt.h>
@@ -55,6 +56,36 @@ struct state {
 	uint32_t responses;
 	uint32_t timeouts;
 };
+
+static void signal_handler(int signum, siginfo_t *info, void *extra)
+{
+	exit(-1);
+}
+
+static void set_signal_handler(void)
+{
+	struct sigaction action;
+
+	action.sa_flags = SA_SIGINFO;
+	action.sa_sigaction = signal_handler;
+	sigaction(SIGTERM, &action, NULL);
+}
+
+static void block_sig_term()
+{
+	sigset_t signal_set;
+	sigemptyset(&signal_set);
+	sigaddset(&signal_set, SIGTERM);
+	sigprocmask(SIG_BLOCK, &signal_set, NULL);
+}
+
+static void unblock_sig_term()
+{
+	sigset_t signal_set;
+	sigemptyset(&signal_set);
+	sigaddset(&signal_set, SIGTERM);
+	sigprocmask(SIG_UNBLOCK, &signal_set, NULL);
+}
 
 static uint64_t timespec_elapsed(const struct timespec *starting,
 				 const struct timespec *stopping)
@@ -123,6 +154,7 @@ done:
 	return fd;
 }
 
+#ifdef USE_RPC_CALLBACK
 static void
 worker_cb(struct clnt_req *cc)
 {
@@ -146,6 +178,7 @@ worker_cb(struct clnt_req *cc)
 	pthread_cond_broadcast(&s->s_cond);
 	pthread_mutex_unlock(&s->s_mutex);
 }
+#endif
 
 static void *
 worker(void *arg)
@@ -171,22 +204,36 @@ worker(void *arg)
 			clnt_req_release(cc);
 			break;
 		}
+#ifdef USE_RPC_CALLBACK
 		cc->cc_refreshes = 1;
 		cc->cc_process_cb = worker_cb;
-
-		cc->cc_error.re_status = CLNT_CALL_BACK(cc);
+                cc->cc_error.re_status = CLNT_CALL_BACK(cc);
+                if (cc->cc_error.re_status != RPC_SUCCESS) {
+                        rpc_perror(&cc->cc_error, "CLNT_CALL_BACK failed");
+                        s->count = i;
+                        clnt_req_release(cc);
+                        break;
+                }
+#else
+		cc->cc_error.re_status = CLNT_CALL_WAIT(cc);
 		if (cc->cc_error.re_status != RPC_SUCCESS) {
-			rpc_perror(&cc->cc_error, "CLNT_CALL_BACK failed");
-			s->count = i;
+			if (cc->cc_error.re_status == RPC_TIMEDOUT) {
+				atomic_inc_uint32_t(&s->timeouts);
+			} else {
+				atomic_inc_uint32_t(&s->failures);
+			}
+			atomic_inc_uint32_t(&s->responses);
 			clnt_req_release(cc);
 			break;
 		}
+#endif
 	}
-
+#ifdef USE_RPC_CALLBACK
 	pthread_mutex_lock(&s->s_mutex);
 	while (s->responses < s->count)
 		pthread_cond_wait(&s->s_cond, &s->s_mutex);
 	pthread_mutex_unlock(&s->s_mutex);
+#endif
 	clock_gettime(CLOCK_MONOTONIC, &s->stopping);
 
 	pthread_mutex_lock(&rpcping_mutex);
@@ -272,6 +319,8 @@ int main(int argc, char *argv[])
 		usage();
 		exit(1);
 	}
+	set_signal_handler();
+	block_sig_term();
 
 	proto = argv[1];
 	host = argv[2];
@@ -375,6 +424,8 @@ int main(int argc, char *argv[])
 		s->proc = proc;
 		pthread_create(&t, NULL, worker, s);
 	}
+
+    unblock_sig_term();
 
 	pthread_mutex_lock(&rpcping_mutex);
 	while (rpcping_threads > 0)
