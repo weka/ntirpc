@@ -610,6 +610,53 @@ xdr_bytes_decode(XDR *xdrs, char **cpp, u_int *sizep, u_int maxsize)
 }
 
 static inline bool
+xdr_bytes_decode_aligned(XDR *xdrs, char **cpp, u_int *sizep, u_int maxsize)
+{
+	char *sp = *cpp;	/* sp is the actual string pointer */
+	uint32_t size;
+	bool ret;
+
+	/*
+	 * first deal with the length since xdr bytes are counted
+	 */
+	if (!XDR_GETUINT32(xdrs, &size)) {
+		__warnx(TIRPC_DEBUG_FLAG_ERROR,
+			"%s:%u ERROR size",
+			__func__, __LINE__);
+		return (false);
+	}
+	if (size > maxsize) {
+		__warnx(TIRPC_DEBUG_FLAG_ERROR,
+			"%s:%u ERROR size %" PRIu32 " > max %u",
+			__func__, __LINE__,
+			size, maxsize);
+		return (false);
+	}
+	*sizep = (u_int)size;		/* only valid size */
+
+	/*
+	 * now deal with the actual bytes
+	 */
+	if (!size)
+		return (true);
+	if (!sp)
+		//sp = (char *)mem_alloc(size);
+		sp = (char *)mem_aligned(512, RNDUP(size));
+
+	ret = xdr_opaque_decode(xdrs, sp, size);
+	if (!ret) {
+		if (!*cpp) {
+			/* Only free if we allocated */
+			mem_free(sp, size);
+		}
+		return (ret);
+	}
+	*cpp = sp;			/* only valid pointer */
+	return (ret);
+}
+
+
+static inline bool
 xdr_bytes_encode(XDR *xdrs, char **cpp, u_int *sizep, u_int maxsize)
 {
 	char *sp = *cpp;	/* sp is the actual string pointer */
@@ -672,6 +719,26 @@ xdr_bytes(XDR *xdrs, char **cpp, u_int *sizep, u_int maxsize)
 		xdrs->x_op);
 	return (false);
 }
+
+static inline bool
+xdr_bytes_aligned(XDR *xdrs, char **cpp, u_int *sizep, u_int maxsize)
+{
+	switch (xdrs->x_op) {
+	case XDR_DECODE:
+		return (xdr_bytes_decode_aligned(xdrs, cpp, sizep, maxsize));
+	case XDR_ENCODE:
+		return (xdr_bytes_encode(xdrs, cpp, sizep, maxsize));
+	case XDR_FREE:
+		return (xdr_bytes_free(xdrs, cpp, *sizep));
+	}
+
+	__warnx(TIRPC_DEBUG_FLAG_ERROR,
+		"%s:%u ERROR xdrs->x_op (%u)",
+		__func__, __LINE__,
+		xdrs->x_op);
+	return (false);
+}
+
 #define inline_xdr_bytes xdr_bytes
 
 /*
